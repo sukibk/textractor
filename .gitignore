@@ -1,5 +1,4 @@
 .env
 /local_dev
 /pdfs
-/textract_results
 /waivers-json
