@@ -4,6 +4,9 @@ import pandas as pd
 from io import BytesIO
 from dotenv import load_dotenv
 import os
+from dateutil import parser
+import re
+from utils.module import parse_address as get_address
 
 # Load environment variables from .env file
 load_dotenv()
@@ -19,16 +22,26 @@ s3 = boto3.client(
     region_name=aws_region
 )
 
+# Defining strings to be removed from objects
+string_remove = {
+    "location": "This certificate is issued for the operations specifically described hereinafter. No person shall conduct any operation pursuant to the"
+}
+
 # Extract needed information
 def extract_final_info(blocks):
     info = {
         "Issued To": "",
         "Responsible Person": "",
         "Address": "",
+        "Street Name and Number": "",
+        "City": "",
+        "State": "",
+        "Zip Code": "",
         "Waiver Number": "",
         "Operations Authorized": "",
         "List of Waived Regulations": "",
-        "Effective Date Range": ""
+        "Effective Date": "",
+        "Expire Date": ""
     }
 
     capture_next = False
@@ -45,6 +58,8 @@ def extract_final_info(blocks):
                 address_line_count = 0
             elif "Responsible Person:" in text:
                 info["Responsible Person"] = text.split(":", 1)[1].strip()
+            elif "Responsible Party:" in text:
+                info["Responsible Person"] = text.split(":", 1)[1].strip()
             elif "Waiver Number:" in text:
                 info["Waiver Number"] = text.split(":", 1)[1].strip()
             elif "OPERATIONS AUTHORIZED" in text:
@@ -56,14 +71,30 @@ def extract_final_info(blocks):
             elif "effective from" in text.lower():
                 date_parts = text.split("effective from", 1)[1].split(" to ", 1)
                 if len(date_parts) == 2:
-                    info["Effective Date Range"] = f"{date_parts[0].strip()} to {date_parts[1].strip()}"
+                    start_date = parser.parse(date_parts[0].strip())
+                    end_date = parser.parse(date_parts[1].strip().split(",")[0].strip())
+                    info["Effective Date"] = start_date.strftime('%m/%d/%Y')
+                    info["Expire Date"] = end_date.strftime('%m/%d/%Y')
 
             elif capture_next:
                 if capture_next == "Address":
-                    info[capture_next] += (text + " ") if address_line_count < 2 else ""
+                    info[capture_next] += (text + " ") if address_line_count < 3 else ""
                     address_line_count += 1
-                    if address_line_count == 2:
+                    if address_line_count == 3:
                         capture_next = False
+                        address_components = None #!!!REMOVE DASH FOR EXECUTION!!! get_address(info["Address"])
+                        if address_components:
+                            info["Street Name and Number"] = address_components.get("Street Address", "")
+                            info["City"] = address_components.get("City", "")
+                            info["State"] = address_components.get("State", "")
+                            info["Zip Code"] = address_components.get("ZIP Code", "")
+                        else:
+                            # Handle the case where address_components is None
+                            info["Street Name and Number"] = "Unknown"
+                            info["City"] = "Unknown"
+                            info["State"] = "Unknown"
+                            info["Zip Code"] = "Unknown"
+
                 elif capture_next == "List of Waived Regulations":
                     # Append each new line to the List of Waived Regulations
                     info[capture_next] += text + " "
@@ -85,13 +116,21 @@ def extract_final_info(blocks):
 
     # Remove 'STANDARD PROVISIONS' from the final output if it was appended
     if "STANDARD PROVISIONS" in info["List of Waived Regulations"]:
-        info["List of Waived Regulations"] = info["List of Waived Regulations"].replace("STANDARD PROVISIONS", "").strip()
+        info["List of Waived Regulations"] = info["List of Waived Regulations"].replace("STANDARD PROVISIONS",
+                                                                                        "").strip()
 
     # Remove 'LIST OF WAIVED REGULATIONS BY SECTION AND TITLE' from the final output if it was appended
     if "LIST OF WAIVED REGULATIONS BY SECTION AND TITLE" in info["Operations Authorized"]:
-        info["Operations Authorized"] = info["Operations Authorized"].replace("LIST OF WAIVED REGULATIONS BY SECTION AND TITLE", "").strip()
+        info["Operations Authorized"] = info["Operations Authorized"].replace(
+            "LIST OF WAIVED REGULATIONS BY SECTION AND TITLE", "").strip()
+
+    # Remove redundant string from ["Address"]
+    if string_remove["location"] in info["Address"]:
+        info["Address"] = info["Address"].replace(
+            string_remove["location"], "").strip()
 
     return info
+
 
 # S3 storage values
 bucket_name = 'uav-waivers'

@@ -16,7 +16,7 @@ bucket_name = 'uav-waivers'
 subfolder = 'waivers-raw-pdf'
 
 # S3 bucket to save Textract results
-results_dir = '../waivers-json'
+results_dir = 'waivers-json'
 os.makedirs(results_dir, exist_ok=True)
 
 # Load environment variables from .env file
