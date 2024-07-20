@@ -5,10 +5,10 @@ import os
 from dotenv import load_dotenv
 
 # URL of the page containing PDF links
-url = "https://www.faa.gov/uas/commercial_operators/part_107_waivers/waivers_issued"
+url = "https://www.faa.gov/uas/commercial_operators/part_107_waivers/waivers_issued?page=3"
 
 # AWS S3 bucket name and subfolder
-bucket_name = "uav-waivers"
+bucket_name = "auvsi-uav-waivers"
 subfolder = "waivers-raw-pdf"  # specify the subfolder in your S3 bucket
 
 # Load environment variables from .env file
