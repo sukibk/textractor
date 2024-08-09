@@ -1,6 +1,5 @@
 import json
 import boto3
-import pandas as pd
 from io import BytesIO
 from dotenv import load_dotenv
 import os
@@ -68,7 +67,7 @@ def extract_final_info(blocks, key):
                 capture_next = "Issued To"
             elif "ADDRESS" in text:
                 capture_next = "Address"
-                address_line= [""] * 3
+                address_line = [""] * 3
                 address_line_count = 0
             elif "Responsible Person:" in text:
                 info["Responsible Person"] = text.split(":", 1)[1].strip()
@@ -97,7 +96,7 @@ def extract_final_info(blocks, key):
                     if address_line_count == 3:
                         info[capture_next] = strip_and_merge(address_line)
                         capture_next = False
-                        address_components = info["Address"] # get_address(info["Address"])
+                        address_components = info["Address"]  # get_address(info["Address"])
                         if address_components:
                             if len(address_line[2]) > 40:  # Case when we have three-row address
                                 street_and_number, rest = address_components.split("/", 1)
@@ -138,13 +137,13 @@ def extract_final_info(blocks, key):
                     # Append each new line to the List of Waived Regulations
                     info[capture_next] += text + " "
                     # Continue capturing until a new section starts
-                    if any(keyword in text for keyword in ["STANDARD PROVISIONS"]):
+                    if any (keyword in text for keyword in ["STANDARD PROVISIONS"]):
                         capture_next = False
                 elif capture_next == "Operations Authorized":
                     # Append each new line to the List of Waived Regulations
                     info[capture_next] += text + " "
                     # Continue capturing until a new section starts
-                    if any(keyword in text for keyword in ["LIST OF WAIVED REGULATIONS BY SECTION AND TITLE"]):
+                    if any (keyword in text for keyword in ["LIST OF WAIVED REGULATIONS BY SECTION AND TITLE"]):
                         capture_next = False
                 else:
                     info[capture_next] = text
@@ -177,6 +176,25 @@ def find_first_empty_row(sheet):
             return row
     return sheet.max_row + 1
 
+# Remove external links in the workbook
+def remove_external_links(workbook):
+    for sheet in workbook.sheetnames:
+        ws = workbook[sheet]
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.data_type == 'f' and cell.value and cell.value.startswith('['):
+                    cell.value = None
+
+# Find the next available Company ID
+def get_next_company_id(locations_sheet):
+    company_ids = [int(row[1][1:]) for row in locations_sheet.iter_rows(min_row=2, values_only=True) if row and row[1] and row[1].startswith('C')]
+    return f"C{(max(company_ids) + 1) if company_ids else 1}"
+
+# Find the next available Operator ID
+def get_next_operator_id(locations_sheet):
+    operator_ids = [row[0] for row in locations_sheet.iter_rows(min_row=2, values_only=True) if row and row[0] is not None]
+    return (max(operator_ids) + 1) if operator_ids else 1
+
 # S3 storage values
 bucket_name = 'auvsi-uav-waivers'
 input_prefix = 'waivers-json/'
@@ -187,6 +205,7 @@ response = s3.get_object(Bucket=bucket_name, Key=output_file_key)
 existing_file = response['Body'].read()
 
 wb = load_workbook(filename=BytesIO(existing_file))
+remove_external_links(wb)
 waiver_data_sheet = wb["Waiver Data"]
 locations_sheet = wb["Locations"]
 
@@ -207,76 +226,74 @@ for obj in response.get('Contents', []):
         address_state = final_extracted_info["State"].strip()
         address_zip = final_extracted_info["Zip Code"].strip()
 
-        # Check if Responsible Person exists in Locations table
-        location_match = None
+        # Initialize operator_id, company_id, and full_operator_id with default values
+        operator_id = None
+        company_id = None
+        full_operator_id = None
+
+        # Find all rows with matching Responsible Person
+        matching_rows = []
         for row in locations_sheet.iter_rows(min_row=2, values_only=True):
             if row and len(row) > 3 and row[3] and row[3].strip() == responsible_person:
-                location_match = row
-                break
+                matching_rows.append(row)
 
-        if not location_match:
-            # Responsible Person does not exist, insert new row
-            new_operator_id = max([row[0] for row in locations_sheet.iter_rows(min_row=2, values_only=True) if row and row[0] is not None] or [0]) + 1
-            if responsible_person in final_extracted_info["Issued To"]:
+        # Check each matching row for address match
+        address_match_found = False
+        for row in matching_rows:
+            if row[4].strip() == address_street:  # Assuming address is in the 5th column (index 4)
+                address_match_found = True
+                if row[11] and row[11].strip().replace(".", "").replace(",", "") == final_extracted_info["Issued To"].strip().replace(".", "").replace(",", ""):
+                    break
+                else:
+                    # Different company, new Company ID needed
+                    if responsible_person == final_extracted_info["Issued To"]:
+                        company_id = "INDIVIDUAL"
+                    else:
+                        company_id = get_next_company_id(locations_sheet)
+                    full_operator_id = f"{row[0]}-{company_id}"
+                    break
+
+        if not matching_rows:
+            # No matching Responsible Person found, assign new Operator ID and Company ID
+            operator_id = get_next_operator_id(locations_sheet)
+            if responsible_person == final_extracted_info["Issued To"]:
                 company_id = "INDIVIDUAL"
             else:
-                company_ids = [int(row[1][1:]) for row in locations_sheet.iter_rows(min_row=2, values_only=True) if row and row[1] and row[1].startswith('C')]
-                new_company_id = max(company_ids or [0]) + 1
-                company_id = f"C{new_company_id}"
-            full_operator_id = f"{new_operator_id}-{company_id}"
+                company_id = get_next_company_id(locations_sheet)
+            full_operator_id = f"{operator_id}-{company_id}"
 
+        elif not address_match_found:
+            # Matching Responsible Person found but no matching address
+            operator_id = matching_rows[0][0]  # Use the operator ID from the first match
+            if responsible_person != final_extracted_info["Issued To"]:
+                company_id = get_next_company_id(locations_sheet)
+            else:
+                company_id = "INDIVIDUAL"
+            full_operator_id = f"{operator_id}-{company_id}"
+
+        elif address_match_found:
+            operator_id = matching_rows[0][0]  # Use the operator ID from the first match
+            if responsible_person != final_extracted_info["Issued To"]:
+                company_id = get_next_company_id(locations_sheet)
+            else:
+                company_id = "INDIVIDUAL"
+            full_operator_id = f"{operator_id}-{company_id}"
+
+        # Skip adding new entry if an exact match is found
+        if not address_match_found:
             new_location = [
-                new_operator_id, company_id, full_operator_id, responsible_person,
+                operator_id, company_id, full_operator_id, responsible_person,
                 address_street, address_city, address_state, address_zip,
                 "", "", "", "" if company_id == "INDIVIDUAL" else final_extracted_info["Issued To"]
             ]
             first_empty_row = find_first_empty_row(locations_sheet)
             for col, value in enumerate(new_location, start=1):
                 locations_sheet.cell(row=first_empty_row, column=col, value=value)
-        else:
-            # Responsible Person exists, check if the address matches
-            if location_match[4].strip() != address_street:
-                # Addresses are different, update the location
-                if location_match[11] == final_extracted_info["Issued To"]:
-                    # Same company name
-                    updated_location = [
-                        location_match[0], location_match[1], f"{location_match[0]}-{location_match[1]}",
-                        responsible_person, address_street, address_city, address_state, address_zip,
-                        "", "", "", location_match[11]
-                    ]
-                else:
-                    # Different company name
-                    company_match = None
-                    for row in locations_sheet.iter_rows(min_row=2, values_only=True):
-                        if row and len(row) > 11 and row[11] == final_extracted_info["Issued To"]:
-                            company_match = row
-                            break
-                    if company_match:
-                        company_id = company_match[1]
-                    else:
-                        company_ids = [int(row[1][1:]) for row in locations_sheet.iter_rows(min_row=2, values_only=True) if row and row[1] and row[1].startswith('C')]
-                        new_company_id = max(company_ids or [0]) + 1
-                        company_id = f"C{new_company_id}"
-                    updated_location = [
-                        location_match[0], company_id, f"{location_match[0]}-{company_id}",
-                        responsible_person, address_street, address_city, address_state, address_zip,
-                        "", "", "", final_extracted_info["Issued To"]
-                    ]
-                first_empty_row = find_first_empty_row(locations_sheet)
-                for i, value in enumerate(updated_location):
-                    locations_sheet.cell(row=first_empty_row, column=i+1, value=value)
-
-        # Store the Operator ID, Company ID, and Full Operator ID for Waiver Data
-        operator_id = new_operator_id
-        company_id = new_location[1]
-        full_operator_id = new_location[2]
 
         # Add entry to Waiver Data sheet
         effective_date = final_extracted_info["Effective Date"]
         expire_date = final_extracted_info["Expire Date"]
-
         waiver_url = final_extracted_info["Waiver URL"]
-
         waived_regulations = obtain_code_entries(final_extracted_info["List of Waived Regulations"])
 
         new_waiver_data = [
