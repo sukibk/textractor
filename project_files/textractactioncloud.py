@@ -17,6 +17,9 @@ subfolder = 'waivers-raw-pdf'
 results_dir = 'waivers-json'
 os.makedirs(results_dir, exist_ok=True)
 
+# File counter
+counter = 1
+
 # Load environment variables from .env file
 load_dotenv()
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
@@ -110,6 +113,7 @@ def save_results(response, file_name):
         logger.error("Failed to save or upload results for %s. Error: %s", file_name, str(e))
 # Main function
 def process_documents(bucket, subfolder):
+    global counter
     files = get_s3_files(bucket, subfolder)
     for file in files:
         result_key = f"{results_dir}/{os.path.basename(file).replace('.pdf', '.json')}"
@@ -119,13 +123,27 @@ def process_documents(bucket, subfolder):
         if file.lower().endswith('.pdf') and not validate_pdf(bucket, file):
             logger.warning("Skipping invalid PDF file: %s", file)
             continue
-        logger.info("Processing %s", file)
+
+        logger.info("Starting Textract process for %s which is %s. document", file, counter)
+
+        # Start the timer
+        start_time = time.time()
+
         try:
             job_id = start_textract(bucket, file)
             response = get_textract_result(job_id)
             save_results(response, file)
+
+            # Calculate elapsed time
+            elapsed_time = time.time() - start_time
+            logger.info("Textract process for %s completed in %.2f seconds", file, elapsed_time)
+            counter += 1
+
         except textract_client.exceptions.UnsupportedDocumentException as e:
             logger.error("Failed to process %s. Error: %s", file, str(e))
         except Exception as e:
             logger.error("An unexpected error occurred while processing %s. Error: %s", file, str(e))
+
+
+# Run the document processing
 process_documents(bucket_name, subfolder)

@@ -38,21 +38,48 @@ import re
 #         return None
 
 
-# Define the waiver codes and corresponding column names
+# # Define the waiver codes and corresponding column names
+# waiver_codes = {
+#     "107.29": "Daylight Operations",
+#     "107.31": "VLOS Operations",
+#     "107.33": "Visual Observer",
+#     "107.35": "Multiple UAS",
+#     "107.39": "Over People",
+#     "107.41": "Operation in Certain Airspace",
+#     "107.51(a)": "Operating Limitations (a)",
+#     "107.51": "Operating Limitations (b, c, d)",
+#     "107.25(b)": "Moving Vehicle or Aircraft",
+#     "107.145": "Over Moving Vehicles"
+# }
+#
+# # Function to check for waiver codes in a string
+# def check_waiver_codes(entry):
+#     result = {name: '' for name in waiver_codes.values()}
+#     for code, name in waiver_codes.items():
+#         if code == "107.51":
+#             pattern = re.compile(r'(107|07)\.51\((b|c|d)\)')
+#         else:
+#             pattern = re.compile(r'(?<!\d)(107|07)\.' + re.escape(code[4:]).replace(r'\.', r'\.') + r'(?!\d)')
+#         if pattern.search(entry):
+#             result[name] = '+'
+#     return result
+
+import re
+
 waiver_codes = {
-    "107.29": "Daylight Operations",
-    "107.31": "VLOS Operations",
-    "107.33": "Visual Observer",
-    "107.35": "Multiple UAS",
-    "107.39": "Over People",
-    "107.41": "Operation in Certain Airspace",
-    "107.51(a)": "Operating Limitations (a)",
-    "107.51": "Operating Limitations (b, c, d)",
-    "107.25(b)": "Moving Vehicle or Aircraft",
-    "107.145": "Over Moving Vehicles"
+    "107.29": "Daylight Operations (14 CFR § 107.29 Daylight operation)",
+    "107.31": "VLOS Operations (14 CFR §107.31 Visual line of sight aircraft operation)",
+    "107.33": "Visual Observer (14 CFR § 107.33 Visual observer)",
+    "107.35": "Multiple UAS (14 CFR § 107.35 Operation of multiple small unmanned aircraft)",
+    "107.39": "Over People (14 CFR § 107.39 Operation over human beings)",
+    "107.41": "Operation in Certain Airspace (14 CFR §107.41)",
+    "107.51(a)": "Operating Limitations (14 CFR § 107.51 (a) for small unmanned aircraft)",
+    "107.51": "Operating Limitations (14 CFR §107.51 (b), (c) and (d) Operating limitations for small unmanned aircraft)",
+    "107.25(b)": "Moving Vehicle or Aircraft (14 CFR § 107.25(b) Operation from a moving vehicle or aircraft)",
+    "107.145": "Over Moving Vehicles (14 CFR §107.145—Operation over Moving Vehicles)"
 }
 
-# Function to check for waiver codes in a string
+# Function to check for waiver codes in a string and store the column name
 def check_waiver_codes(entry):
     result = {name: '' for name in waiver_codes.values()}
     for code, name in waiver_codes.items():
@@ -61,8 +88,9 @@ def check_waiver_codes(entry):
         else:
             pattern = re.compile(r'(?<!\d)(107|07)\.' + re.escape(code[4:]).replace(r'\.', r'\.') + r'(?!\d)')
         if pattern.search(entry):
-            result[name] = '+'
+            result[name] = name  # Store the name of the column where the code is found
     return result
+
 
 state_mapping = {
     "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",

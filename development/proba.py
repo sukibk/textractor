@@ -8,10 +8,6 @@ from dateutil import parser
 import re
 from utils.module import check_waiver_codes as obtain_code_entries
 from utils.module import convert_state_code_to_name as state_code_to_name
-from openpyxl.styles import NamedStyle
-from openpyxl.utils.datetime import to_excel
-from datetime import datetime
-
 
 # Load environment variables from .env file
 load_dotenv()
@@ -39,7 +35,6 @@ def strip_and_merge(strings_list):
     # Merge the stripped strings with '/'
     merged_string = '/'.join(stripped_strings)
     return merged_string
-
 
 # Extract needed information
 def extract_final_info(blocks, key):
@@ -89,26 +84,10 @@ def extract_final_info(blocks, key):
             elif "effective from" in text.lower():
                 date_parts = text.split("effective from", 1)[1].split(" to ", 1)
                 if len(date_parts) == 2:
-                    try:
-                        start_date = parser.parse(date_parts[0].strip())
-                    except (parser.ParserError, ValueError):
-                        # Fallback to default date if parsing fails
-                        start_date = "9/9/9999"
-
-                    try:
-                        # Handle cases where additional text might confuse parsing
-                        end_date_text = date_parts[1].strip().split(" and ")[0].split(" is subject")[0].strip()
-                        end_date = parser.parse(end_date_text)
-                    except (parser.ParserError, ValueError):
-                        # Fallback to default date if parsing fails
-                        end_date = "9/9/9999"
-
-                    # Format dates to the desired string format if they are valid dates
-                    info["Effective Date"] = start_date if isinstance(start_date, str) else start_date.strftime(
-                        '%m/%d/%Y')
-                    info["Expire Date"] = end_date if isinstance(end_date, str) else end_date.strftime('%m/%d/%Y')
-
-                    # print("Effective date: " + info["Effective Date"] + " Expire date:" + info["Expire Date"])
+                    start_date = parser.parse(date_parts[0].strip())
+                    end_date = parser.parse(date_parts[1].strip().split(",")[0].strip())
+                    info["Effective Date"] = start_date.strftime('%m/%d/%Y')
+                    info["Expire Date"] = end_date.strftime('%m/%d/%Y')
 
             elif capture_next:
                 if capture_next == "Address":
@@ -207,16 +186,9 @@ def remove_external_links(workbook):
                     cell.value = None
 
 # Find the next available Company ID
-def get_next_company_id(sheet):
-    # Extract the numeric part from each Company ID in the second column (index 1)
-    company_ids = [
-        int(row[0][1:])  # Adjust to 0 if Company ID is in the first column
-        for row in sheet.iter_rows(min_row=2, values_only=True)
-        if row and row[0] and row[0].startswith('C')
-    ]
-    # Determine the next Company ID by finding the maximum and incrementing it
+def get_next_company_id(locations_sheet):
+    company_ids = [int(row[1][1:]) for row in locations_sheet.iter_rows(min_row=2, values_only=True) if row and row[1] and row[1].startswith('C')]
     return f"C{(max(company_ids) + 1) if company_ids else 1}"
-
 
 # Find the next available Operator ID
 def get_next_operator_id(locations_sheet):
@@ -225,7 +197,7 @@ def get_next_operator_id(locations_sheet):
 
 # S3 storage values
 bucket_name = 'auvsi-uav-waivers'
-input_prefix = 'waivers-json'
+input_prefix = 'waivers-json/'
 output_file_key = 'waivers_info.xlsx'
 
 # Read the existing Excel file from S3
@@ -236,15 +208,6 @@ wb = load_workbook(filename=BytesIO(existing_file))
 remove_external_links(wb)
 waiver_data_sheet = wb["Waiver Data"]
 locations_sheet = wb["Locations"]
-companies_sheet = wb["Company Data"]
-companies_sheetv2 = wb["Company Data V2"]
-
-# Define a date format style (optional for reusability)
-date_style = NamedStyle(name="date_style", number_format="M/D/YYYY")
-
-# Add the date style to the workbook if not already present
-if "date_style" not in wb.named_styles:
-    wb.add_named_style(date_style)
 
 # List objects in the specified S3 bucket and prefix
 response = s3.list_objects_v2(Bucket=bucket_name, Prefix=input_prefix)
@@ -263,8 +226,6 @@ for obj in response.get('Contents', []):
         address_state = final_extracted_info["State"].strip()
         address_zip = final_extracted_info["Zip Code"].strip()
 
-        # print(responsible_person + ':' + address_state, address_city, address_zip)
-
         # Initialize operator_id, company_id, and full_operator_id with default values
         operator_id = None
         company_id = None
@@ -276,27 +237,10 @@ for obj in response.get('Contents', []):
             if row and len(row) > 3 and row[3] and row[3].strip() == responsible_person:
                 matching_rows.append(row)
 
-
-        # Function to find company_id by company_name
-        def find_company_id(company_name):
-            # Load the "Companies" sheet from the Excel file using read_excel_from_s3
-
-            # Iterate through the rows to find the company_name in the second column ("Name")
-            for row1 in companies_sheet.iter_rows(min_row=2, values_only=True):  # Skip header row
-                name = row1[1]  # Second column
-                company_id1 = row1[0]  # First column (Company ID)
-
-                if name == company_name:
-                    return company_id1  # Return the company_id if a match is found
-
-            # Return None if no match is found
-            return None
-
         # Check each matching row for address match
         address_match_found = False
         for row in matching_rows:
-            # print(row)
-            if row[5].strip() == address_city:  # Assuming city is in the 6th column (index 5)
+            if row[4].strip() == address_street:  # Assuming address is in the 5th column (index 4)
                 address_match_found = True
                 if row[11] and row[11].strip().replace(".", "").replace(",", "") == final_extracted_info["Issued To"].strip().replace(".", "").replace(",", ""):
                     break
@@ -305,7 +249,7 @@ for obj in response.get('Contents', []):
                     if responsible_person == final_extracted_info["Issued To"]:
                         company_id = "INDIVIDUAL"
                     else:
-                        company_id = get_next_company_id(companies_sheet)
+                        company_id = get_next_company_id(locations_sheet)
                     full_operator_id = f"{row[0]}-{company_id}"
                     break
 
@@ -315,40 +259,14 @@ for obj in response.get('Contents', []):
             if responsible_person == final_extracted_info["Issued To"]:
                 company_id = "INDIVIDUAL"
             else:
-                company_id = find_company_id(final_extracted_info["Issued To"])
-                if company_id is None:
-                    company_id = get_next_company_id(companies_sheet)
-                    new_company_data = [
-                        company_id,
-                        final_extracted_info["Issued To"],
-                        final_extracted_info["City"],
-                        final_extracted_info["State"],
-                        final_extracted_info["Zip Code"]
-                    ]
-                    print(new_company_data)
-                    # Append the new company data to the sheet
-                    companies_sheet.append(new_company_data)
-                    companies_sheetv2.append(new_company_data)
+                company_id = get_next_company_id(locations_sheet)
             full_operator_id = f"{operator_id}-{company_id}"
 
         elif not address_match_found:
             # Matching Responsible Person found but no matching address
             operator_id = matching_rows[0][0]  # Use the operator ID from the first match
             if responsible_person != final_extracted_info["Issued To"]:
-                company_id = find_company_id(final_extracted_info["Issued To"])
-                if company_id is None:
-                    company_id = get_next_company_id(companies_sheet)
-                    new_company_data = [
-                        company_id,
-                        final_extracted_info["Issued To"],
-                        final_extracted_info["City"],
-                        final_extracted_info["State"],
-                        final_extracted_info["Zip Code"]
-                    ]
-                    print(new_company_data)
-                    # Append the new company data to the sheet
-                    companies_sheet.append(new_company_data)
-                    companies_sheetv2.append(new_company_data)
+                company_id = get_next_company_id(locations_sheet)
             else:
                 company_id = "INDIVIDUAL"
             full_operator_id = f"{operator_id}-{company_id}"
@@ -356,20 +274,7 @@ for obj in response.get('Contents', []):
         elif address_match_found:
             operator_id = matching_rows[0][0]  # Use the operator ID from the first match
             if responsible_person != final_extracted_info["Issued To"]:
-                company_id = find_company_id(final_extracted_info["Issued To"])
-                if company_id is None:
-                    company_id = get_next_company_id(companies_sheet)
-                    new_company_data = [
-                        company_id,
-                        final_extracted_info["Issued To"],
-                        final_extracted_info["City"],
-                        final_extracted_info["State"],
-                        final_extracted_info["Zip Code"]
-                    ]
-                    print(new_company_data)
-                    # Append the new company data to the sheet
-                    companies_sheet.append(new_company_data)
-                    companies_sheetv2.append(new_company_data)
+                company_id = get_next_company_id(locations_sheet)
             else:
                 company_id = "INDIVIDUAL"
             full_operator_id = f"{operator_id}-{company_id}"
@@ -386,57 +291,30 @@ for obj in response.get('Contents', []):
                 locations_sheet.cell(row=first_empty_row, column=col, value=value)
 
         # Add entry to Waiver Data sheet
-        # Convert to datetime or use a default fallback datetime
-        effective_date = parser.parse(final_extracted_info["Effective Date"]) if isinstance(
-            final_extracted_info["Effective Date"], str) and '/' in final_extracted_info[
-                                                                                     "Effective Date"] else datetime(
-            9999, 9, 9)
-        expire_date = parser.parse(final_extracted_info["Expire Date"]) if isinstance(
-            final_extracted_info["Expire Date"], str) and '/' in final_extracted_info["Expire Date"] else datetime(9999,
-                                                                                                                   9, 9)
+        effective_date = final_extracted_info["Effective Date"]
+        expire_date = final_extracted_info["Expire Date"]
         waiver_url = final_extracted_info["Waiver URL"]
         waived_regulations = obtain_code_entries(final_extracted_info["List of Waived Regulations"])
-        waiver_number = final_extracted_info["Waiver Number"]
 
-        # Function to check if the waiver number already exists
-        def waiver_number_exists(sheet, waiver_number):
-            for row in sheet.iter_rows(min_row=2, max_col=6, values_only=True):  # Check up to the 6th column
-                if row and row[5] == waiver_number:  # Adjust index (5) if columns start from 1
-                    return True
-            return False
-
-
-        # Check if the waiver number already exists
-        if not waiver_number_exists(waiver_data_sheet, waiver_number):
-            waived_regulations = obtain_code_entries(final_extracted_info["List of Waived Regulations"])
-
-            new_waiver_data = [
-                operator_id, company_id, full_operator_id, effective_date,
-                expire_date, waiver_number, waiver_url,
-                waived_regulations["Daylight Operations (14 CFR § 107.29 Daylight operation)"],
-                waived_regulations["VLOS Operations (14 CFR §107.31 Visual line of sight aircraft operation)"],
-                waived_regulations["Visual Observer (14 CFR § 107.33 Visual observer)"],
-                waived_regulations["Multiple UAS (14 CFR § 107.35 Operation of multiple small unmanned aircraft)"],
-                waived_regulations["Over People (14 CFR § 107.39 Operation over human beings)"],
-                waived_regulations["Operation in Certain Airspace (14 CFR §107.41)"],
-                waived_regulations["Operating Limitations (14 CFR § 107.51 (a) for small unmanned aircraft)"],
-                waived_regulations[
-                    "Operating Limitations (14 CFR §107.51 (b), (c) and (d) Operating limitations for small unmanned aircraft)"],
-                waived_regulations[
-                    "Moving Vehicle or Aircraft (14 CFR § 107.25(b) Operation from a moving vehicle or aircraft)"],
-                waived_regulations["Over Moving Vehicles (14 CFR §107.145—Operation over Moving Vehicles)"],
-                final_extracted_info["Operations Authorized"]
-            ]
-
-            first_empty_row = find_first_empty_row(waiver_data_sheet)
-            for col, value in enumerate(new_waiver_data, start=1):
-                cell = waiver_data_sheet.cell(row=first_empty_row, column=col, value=value)
-                if col in [4, 5]:  # Columns for Effective Date and Expire Date
-                    if isinstance(value, datetime):  # Ensure value is a datetime object
-                        cell.value = value
-                        cell.style = date_style  # Apply date style
-        else:
-            print(f"Waiver Number {waiver_number} already exists. Skipping entry.")
+        new_waiver_data = [
+            operator_id, company_id, full_operator_id, effective_date,
+            expire_date, final_extracted_info["Waiver Number"],
+            waiver_url,
+            waived_regulations["Daylight Operations"],
+            waived_regulations["VLOS Operations"],
+            waived_regulations["Visual Observer"],
+            waived_regulations["Multiple UAS"],
+            waived_regulations["Over People"],
+            waived_regulations["Operation in Certain Airspace"],
+            waived_regulations["Operating Limitations (a)"],
+            waived_regulations["Operating Limitations (b, c, d)"],
+            waived_regulations["Moving Vehicle or Aircraft"],
+            waived_regulations["Over Moving Vehicles"],
+            final_extracted_info["Operations Authorized"]
+        ]
+        first_empty_row = find_first_empty_row(waiver_data_sheet)
+        for col, value in enumerate(new_waiver_data, start=1):
+            waiver_data_sheet.cell(row=first_empty_row, column=col, value=value)
 
 # Save the updated Excel file to a BytesIO object
 output = BytesIO()
